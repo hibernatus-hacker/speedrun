@@ -1,0 +1,4 @@
+requests>=2.25.0
+paramiko>=2.8.0
+scp>=0.14.0
+tqdm>=4.60.0

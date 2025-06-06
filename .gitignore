@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+speedrun_env/
+.venv
+
+# Model artifacts
+*.pt
+*.pth
+*.pkl
+*.h5
+*.hdf5
+*.onnx
+*.safetensors
+
+# Results
+speedrun_results_*/
+results/
+outputs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Config with API keys
+config.yaml
+.env
+
+# Package files
+dist/
+build/
+*.egg-info/
