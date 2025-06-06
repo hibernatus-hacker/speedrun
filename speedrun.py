@@ -26,17 +26,46 @@ class VastAI:
     def _run_vastai_cmd(self, cmd: list) -> dict:
         """Run a vastai CLI command and return parsed JSON result"""
         try:
+            # Use API key from environment if available
+            cmd_args = ["vastai"] + cmd + ["--raw"]
+            api_key = os.environ.get("VAST_API_KEY")
+            if api_key:
+                cmd_args.extend(["--api-key", api_key])
+            
             result = subprocess.run(
-                ["vastai"] + cmd + ["--raw"],
+                cmd_args,
                 capture_output=True,
                 text=True,
                 check=True
             )
             return json.loads(result.stdout)
+        except FileNotFoundError:
+            print("❌ vastai command not found!")
+            print("Please install it with: pip install vastai")
+            print("Then set your API key with: vastai set api-key YOUR_API_KEY")
+            raise RuntimeError("vastai CLI not installed")
         except subprocess.CalledProcessError as e:
+            print(f"❌ vastai command failed with exit code {e.returncode}")
+            print(f"Command: vastai {' '.join(cmd + ['--raw'])}")
+            print(f"Stderr: {e.stderr}")
+            print(f"Stdout: {e.stdout}")
             raise RuntimeError(f"vastai command failed: {e.stderr}")
         except json.JSONDecodeError as e:
-            raise RuntimeError(f"Failed to parse vastai response: {e}")
+            # Check for common error messages in stdout
+            if "Invalid user key" in result.stdout:
+                print("❌ Invalid vast.ai API key!")
+                print("Please set your API key with: vastai set api-key YOUR_API_KEY")
+                print("Get your API key from: https://vast.ai/console/api-keys")
+                raise RuntimeError("Invalid vast.ai API key")
+            elif "failed with error" in result.stdout:
+                print(f"❌ vast.ai API error: {result.stdout.strip()}")
+                raise RuntimeError(f"vast.ai API error: {result.stdout.strip()}")
+            else:
+                print(f"❌ Failed to parse vastai JSON response")
+                print(f"Command: vastai {' '.join(cmd + ['--raw'])}")
+                print(f"Raw stdout: '{result.stdout}'")
+                print(f"Raw stderr: '{result.stderr}'")
+                raise RuntimeError(f"Failed to parse vastai response: {e}")
     
     def find_best_gpu(self) -> Dict:
         """Find the most powerful multi-GPU instance"""
@@ -183,13 +212,25 @@ class SpeedRun:
         else:
             print("⚠️ No specific SSH port found, trying default port 22")
         
-        # Connect via SSH
+        # Connect via SSH with retries
         print(f"🔗 Connecting to {host}:{port}...")
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(hostname=host, port=port, username="root", password="root", timeout=60)
-        scp = SCPClient(ssh.get_transport())
-        print("✅ Connected via SSH")
+        
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                ssh.connect(hostname=host, port=port, username="root", password="root", timeout=30)
+                scp = SCPClient(ssh.get_transport())
+                print("✅ Connected via SSH")
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"⏳ SSH connection failed (attempt {attempt + 1}/{max_retries}), retrying in 10s...")
+                    time.sleep(10)
+                else:
+                    print(f"❌ Failed to connect via SSH after {max_retries} attempts: {e}")
+                    raise
         
         try:
             # Upload project
@@ -279,6 +320,10 @@ class SpeedRun:
             contract_id = self.vast.create_instance(instance["id"])
             instance_info = self.vast.wait_for_instance(contract_id)
             
+            # Wait a bit more for instance to fully boot
+            print("⏳ Waiting 30s for instance to fully boot...")
+            time.sleep(30)
+            
             # Package project
             package_path = self.package_project(project_path)
             
@@ -316,17 +361,12 @@ def main():
         print("Error: No train.py found in project directory")
         sys.exit(1)
     
-    api_key = os.environ.get("VAST_API_KEY")
-    if not api_key:
-        print("Error: VAST_API_KEY environment variable not set")
-        sys.exit(1)
-    
     print(f"\n🚀 Starting speedrun for: {project_path.name}")
     if dry_run:
         print("🔍 DRY RUN MODE - will only search for GPUs, not create instances")
     print("=" * 50)
     
-    runner = SpeedRun(api_key)
+    runner = SpeedRun(None)
     
     if dry_run:
         # Just test the search functionality
