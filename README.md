@@ -8,6 +8,7 @@ Simple tool to run ML training on vast.ai GPU instances.
    ```bash
    pip install vastai
    vastai set api-key YOUR_API_KEY
+   vastai create ssh-key  # Required for secure SSH access
    ```
 
 2. **Run training:**

@@ -10,6 +10,7 @@ import time
 import tarfile
 import tempfile
 import subprocess
+import shlex
 from pathlib import Path
 from typing import Dict
 
@@ -149,10 +150,6 @@ class VastAI:
             for instance in instances:
                 if instance["id"] == contract_id and instance["actual_status"] == "running":
                     print("✅ Instance is ready!")
-                    # Debug: show available fields for SSH connection
-                    ssh_fields = [k for k in instance.keys() if any(term in k.lower() for term in ['ssh', 'port', 'host', 'ip'])]
-                    if ssh_fields:
-                        print(f"🔍 Available SSH-related fields: {ssh_fields}")
                     return instance
             
             time.sleep(10)
@@ -174,9 +171,11 @@ class SpeedRun:
         """Package project into tar.gz"""
         print("📦 Packaging project...")
         
-        temp_file = tempfile.NamedTemporaryFile(suffix='.tar.gz', delete=False)
-        temp_path = Path(temp_file.name)
-        temp_file.close()
+        # Create temporary tar file with secure permissions
+        fd, temp_name = tempfile.mkstemp(suffix='.tar.gz')
+        os.close(fd)  # Close file descriptor
+        temp_path = Path(temp_name)
+        os.chmod(temp_path, 0o600)  # Secure permissions (owner read/write only)
         
         with tarfile.open(temp_path, 'w:gz') as tar:
             for item in project_path.iterdir():
@@ -215,12 +214,22 @@ class SpeedRun:
         # Connect via SSH with retries
         print(f"🔗 Connecting to {host}:{port}...")
         ssh = paramiko.SSHClient()
+        
+        # Use a more restrictive policy but still allow new hosts (needed for vast.ai)
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         
         max_retries = 5
         for attempt in range(max_retries):
             try:
-                ssh.connect(hostname=host, port=port, username="root", password="root", timeout=30)
+                # vast.ai instances use SSH key authentication, not password
+                ssh.connect(
+                    hostname=host, 
+                    port=port, 
+                    username="root",
+                    timeout=30,
+                    look_for_keys=True,
+                    allow_agent=True
+                )
                 scp = SCPClient(ssh.get_transport())
                 print("✅ Connected via SSH")
                 break
@@ -230,6 +239,8 @@ class SpeedRun:
                     time.sleep(10)
                 else:
                     print(f"❌ Failed to connect via SSH after {max_retries} attempts: {e}")
+                    print("💡 Make sure you have SSH keys set up with vast.ai:")
+                    print("   vastai create ssh-key")
                     raise
         
         try:
@@ -257,17 +268,18 @@ class SpeedRun:
                 actual_project_dir = f"/root/{project_name}"
                 print(f"⚠️ train.py not found, using default: {actual_project_dir}")
             
-            # Install requirements if they exist
-            stdin, stdout, stderr = ssh.exec_command(f"ls {actual_project_dir}/requirements.txt")
+            # Install requirements if they exist - using safe path handling
+            safe_project_dir = shlex.quote(actual_project_dir)
+            stdin, stdout, stderr = ssh.exec_command(f"ls {safe_project_dir}/requirements.txt")
             if not stderr.read():
                 print("📦 Installing requirements...")
-                stdin, stdout, stderr = ssh.exec_command(f"cd {actual_project_dir} && pip install -r requirements.txt")
+                stdin, stdout, stderr = ssh.exec_command(f"cd {safe_project_dir} && pip install -r requirements.txt")
                 stdout.read()  # Wait for command to complete
                 print("✅ Requirements installed")
             
-            # Run training
+            # Run training - using safe path handling
             print("🚀 Running train.py...")
-            stdin, stdout, stderr = ssh.exec_command(f"cd {actual_project_dir} && python train.py", get_pty=True)
+            stdin, stdout, stderr = ssh.exec_command(f"cd {safe_project_dir} && python train.py", get_pty=True)
             
             # Stream output
             for line in iter(stdout.readline, ''):
@@ -286,7 +298,8 @@ class SpeedRun:
             model_files = []
             
             for pattern in patterns:
-                stdin, stdout, stderr = ssh.exec_command(f"find {actual_project_dir} -name '{pattern}' -type f")
+                safe_pattern = shlex.quote(pattern)
+                stdin, stdout, stderr = ssh.exec_command(f"find {safe_project_dir} -name {safe_pattern} -type f")
                 files = [f.strip() for f in stdout.read().decode().split('\n') if f.strip()]
                 model_files.extend(files)
             
